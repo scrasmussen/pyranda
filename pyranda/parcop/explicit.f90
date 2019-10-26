@@ -41,15 +41,12 @@ module LES_explicit
   real(c_double), parameter :: dfe6 = 1.0D0/  64.0D0
   real(c_double), dimension(4) :: fe6 = [afe6,bfe6,cfe6,dfe6]
 
-  
   ! Filter values, gaussian 7pt stencil
   real(c_double), parameter :: agf = .474833D0
   real(c_double), parameter :: bgf = .1746813
   real(c_double), parameter :: cgf = .06426166
   real(c_double), parameter :: dgf = .02364054
   real(c_double), dimension(4) :: gf3 = [agf,bgf,cgf,dgf]
-
-  !$omp declare target(afe6,bfe6,cfe6,dfe6,fe6)
   
 
 contains
@@ -135,7 +132,6 @@ contains
     double precision :: invdx
 
     CALL startCPU()
-
     
     invdx = 1.0 / dx
     
@@ -145,10 +141,10 @@ contains
     case(1)
 
        ! interior points
-       !$omp target teams distribute parallel do collapse(3) 
-       do k=1,size(f,3)
+       !$omp target teams distribute parallel do collapse(3)
+       do i=4, size(f,1)-3
           do j=1,size(f,2)
-             do i=4, size(f,1)-3
+             do k=1,size(f,3)                
                 df(i,j,k) = ( & 
                      d16e(3)*( f(i+3,j,k) - f(i-3,j,k) ) + &
                      d16e(2)*( f(i+2,j,k) - f(i-2,j,k) ) + &
@@ -211,8 +207,8 @@ contains
        elseif (bc1 == -1) then ! anti-symmtry
           
           !$omp target teams distribute parallel do collapse(2)
-          do k=1,size(f,3)
-             do j=1,size(f,2)             
+          do j=1,size(f,2)
+             do k=1,size(f,3)
                 
                 df(1,j,k) = ( & 
                      d16e(3)*( f(4,j,k) + f(4,j,k) ) + &
@@ -238,9 +234,10 @@ contains
 
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
-       do k=1,size(f,3)
-          do j=4, size(f,2)-3
-             do i=1,size(f,1)                
+       do j=4, size(f,2)-3
+          do i=1,size(f,1)
+             do k=1,size(f,3)
+                
                 df(i,j,k) = ( & 
                      d16e(3)*( f(i,j+3,k) - f(i,j-3,k) ) + &
                      d16e(2)*( f(i,j+2,k) - f(i,j-2,k) ) + &
@@ -256,8 +253,8 @@ contains
        
        if ( bc1 == 2 ) then ! standard telescoped
           !$omp target teams distribute parallel do collapse(2)
-          do k=1,size(f,3)
-             do i=1,size(f,1)
+          do i=1,size(f,1)
+             do k=1,size(f,3)
                 df(i,1,k) = ( &
                      f(i,1,k)*d16eb1(1) + &
                      f(i,2,k)*d16eb1(2) + &
@@ -281,8 +278,8 @@ contains
        elseif (bc1 == 1) then ! symmetry
 
           !$omp target teams distribute parallel do collapse(2)
-          do k=1,size(f,3)
-             do i=1,size(f,1)
+          do i=1,size(f,1)
+             do k=1,size(f,3)
                 
                 df(i,1,k) = 0.0D0
                 
@@ -302,8 +299,8 @@ contains
        elseif (bc1 == -1) then ! anti-symmtry
           
           !$omp target teams distribute parallel do collapse(2)
-          do k=1,size(f,3)
-             do i=1,size(f,1)
+          do i=1,size(f,1)
+             do k=1,size(f,3)
                 
                 df(i,1,k) = ( & 
                      d16e(3)*( f(i,4,k) + f(i,4,k) ) + &
@@ -449,9 +446,9 @@ contains
 
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
-       do k=1,size(f,3)
+       do i=4, size(f,1)-3
           do j=1,size(f,2)
-             do i=4, size(f,1)-3
+             do k=1,size(f,3)
                 df(i,j,k) = ( d4e4(1)*f(i,j,k) + & 
                      d4e4(4)*( f(i+3,j,k) + f(i-3,j,k) ) + &
                      d4e4(3)*( f(i+2,j,k) + f(i-2,j,k) ) + &
@@ -460,15 +457,47 @@ contains
           end do
        end do
        !$omp end target teams distribute parallel do
-                        
+
+!!$       if ( bc1 == 2 ) then
+!!$          do j=1,size(f,2)
+!!$             do k=1,size(f,3)
+!!$                df(3,j,k) = ( &
+!!$                     f(1,j,k)*d4e4b3(1) + &
+!!$                     f(2,j,k)*d4e4b3(2) + &
+!!$                     f(3,j,k)*d4e4b3(3) + &
+!!$                     f(4,j,k)*d4e4b3(4) + &
+!!$                     f(5,j,k)*d4e4b3(5) )
+!!$                df(2,j,k) = df(3,j,k)
+!!$                df(1,j,k) = df(3,j,k)          
+!!$             end do
+!!$          end do
+!!$       endif
+!!$
+!!$       if ( bc2 == 2 ) then
+!!$          n = size(f,1)
+!!$          do j=1,size(f,2)
+!!$             do k=1,size(f,3)
+!!$                df(n-2,j,k) = ( &
+!!$                     f(n,j,k)*d4e4b3(1) + &
+!!$                     f(n-1,j,k)*d4e4b3(2) + &
+!!$                     f(n-2,j,k)*d4e4b3(3) + &
+!!$                     f(n-3,j,k)*d4e4b3(4) + &
+!!$                     f(n-4,j,k)*d4e4b3(5) )
+!!$                df(n-1,j,k) = df(n-2,j,k)
+!!$                df(n,j,k)   = df(n-2,j,k)          
+!!$             end do
+!!$          end do
+!!$       endif
+                           
+
        
     case(2)
 
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
-       do k=1,size(f,3)
-          do j=4, size(f,2)-3
-             do i=1,size(f,1)
+       do j=4, size(f,2)-3
+          do i=1,size(f,1)
+             do k=1,size(f,3)
                 df(i,j,k) = ( d4e4(1)*f(i,j,k) + & 
                      d4e4(4)*( f(i,j+3,k) + f(i,j-3,k) ) + &
                      d4e4(3)*( f(i,j+2,k) + f(i,j-2,k) ) + &
@@ -483,8 +512,8 @@ contains
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
        do k=4, size(f,3)-3
-          do j=1,size(f,2)
-             do i=1,size(f,1)
+          do i=1,size(f,1)
+             do j=1,size(f,2)
                 df(i,j,k) = ( d4e4(1)*f(i,j,k) + & 
                      d4e4(4)*( f(i,j,k+3) + f(i,j,k-3) ) + &
                      d4e4(3)*( f(i,j,k+2) + f(i,j,k-2) ) + &
@@ -505,16 +534,18 @@ contains
 
 
 
-  subroutine filte6(f,df,direction,bc1,bc2,nx,ny,nz)
+  subroutine filte6(f,df,dx,direction,bc1,bc2)
     ! Assumes boundary data has been copied for periodic flow
-    INTEGER,               INTENT(IN) :: nx,ny,nz
-    real(c_double), dimension(nx,ny,nz),intent(in)  :: f
-    real(c_double), dimension(nx,ny,nz),intent(out) :: df
+    real(c_double), dimension(:,:,:),intent(in)  :: f
+    real(c_double), dimension(:,:,:),intent(out) :: df
+    real(c_double), intent(in) :: dx
     integer(c_int), intent(in) :: direction,bc1,bc2
     
     integer :: i,j,k,n
-
+    double precision :: invdx
     
+    !invdx = 1.0 / dx ! NA
+
     CALL startCPU()
     
     select case(direction)
@@ -523,9 +554,9 @@ contains
 
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
-       do k=1,size(f,3)       
-          do j=1,size(f,2)             
-             do i=4, size(f,1)-3
+       do i=4, size(f,1)-3
+          do j=1,size(f,2)
+             do k=1,size(f,3)
                 df(i,j,k) = ( fe6(1)*f(i,j,k) + & 
                      fe6(4)*( f(i+3,j,k) + f(i-3,j,k) ) + &
                      fe6(3)*( f(i+2,j,k) + f(i-2,j,k) ) + &
@@ -538,9 +569,9 @@ contains
 
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
-       do k=1,size(f,3)
-          do j=4, size(f,2)-3
-             do i=1,size(f,1)
+       do j=4, size(f,2)-3
+          do i=1,size(f,1)
+             do k=1,size(f,3)
                 df(i,j,k) = ( fe6(1)*f(i,j,k) + & 
                      fe6(4)*( f(i,j+3,k) + f(i,j-3,k) ) + &
                      fe6(3)*( f(i,j+2,k) + f(i,j-2,k) ) + &
@@ -555,8 +586,8 @@ contains
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
        do k=4, size(f,3)-3
-          do j=1,size(f,2)
-             do i=1,size(f,1)
+          do i=1,size(f,1)
+             do j=1,size(f,2)
                 df(i,j,k) = ( fe6(1)*f(i,j,k) + & 
                      fe6(4)*( f(i,j,k+3) + f(i,j,k-3) ) + &
                      fe6(3)*( f(i,j,k+2) + f(i,j,k-2) ) + &
@@ -573,14 +604,17 @@ contains
 
 
   
-  subroutine gfilt3(f,df,direction,bc1,bc2,nx,ny,nz)
+  subroutine gfilt3(f,df,dx,direction,bc1,bc2)
     ! Assumes boundary data has been copied for periodic flow
-    INTEGER,        INTENT(IN) :: nx,ny,nz
-    real(c_double), dimension(nx,ny,nz),intent(in)  :: f
-    real(c_double), dimension(nx,ny,nz),intent(out) :: df
+    real(c_double), dimension(:,:,:),intent(in)  :: f
+    real(c_double), dimension(:,:,:),intent(out) :: df
+    real(c_double), intent(in) :: dx
     integer(c_int), intent(in) :: direction,bc1,bc2
     
     integer :: i,j,k,n
+    double precision :: invdx
+    
+    !invdx = 1.0 / dx ! NA
 
     CALL startCPU()
         
@@ -590,9 +624,9 @@ contains
 
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
-       do k=1,size(f,3)
+       do i=4, size(f,1)-3
           do j=1,size(f,2)
-             do i=4, size(f,1)-3
+             do k=1,size(f,3)
                 df(i,j,k) = ( gf3(1)*f(i,j,k) + & 
                      gf3(4)*( f(i+3,j,k) + f(i-3,j,k) ) + &
                      gf3(3)*( f(i+2,j,k) + f(i-2,j,k) ) + &
@@ -605,9 +639,9 @@ contains
 
        ! interior points
        !$omp target teams distribute parallel do collapse(3)
-       do k=1,size(f,3)
-          do j=4, size(f,2)-3
-             do i=1,size(f,1)
+       do j=4, size(f,2)-3
+          do i=1,size(f,1)
+             do k=1,size(f,3)               
                 df(i,j,k) = ( gf3(1)*f(i,j,k) + & 
                      gf3(4)*( f(i,j+3,k) + f(i,j-3,k) ) + &
                      gf3(3)*( f(i,j+2,k) + f(i,j-2,k) ) + &

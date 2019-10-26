@@ -613,6 +613,12 @@
     real(kind=c_double), dimension(n1,n2,n3), intent(inout) :: r
     integer(c_int) :: i,j,k
     if( n > n1 ) return
+#ifdef OMP_TARGET
+!$omp target data map(c, r)
+#endif
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
     do k=1,n3
     do j=1,n2
       do i=1,n-2
@@ -626,6 +632,9 @@
       end do
     end do
     end do
+#ifdef OMP_TARGET
+!$omp end target data
+#endif
   end subroutine bpentLUS3x
 
 
@@ -667,6 +676,12 @@
     real(kind=c_double), dimension(n1,n2,n3), intent(inout) :: r
     integer(c_int) :: i,j,k
     if( n > n2 ) return
+#ifdef OMP_TARGET
+!$omp target data map(c, r)
+#endif
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
     do k=1,n3
       do j=1,n-2
         do i=1,n1
@@ -684,6 +699,9 @@
         end do
       end do
     end do
+#ifdef OMP_TARGET
+!$omp end target data 
+#endif
   end subroutine bpentLUS3y
 
 
@@ -756,15 +774,26 @@
     real(kind=c_double), dimension(n1,n2,n3), intent(inout) :: r
     integer(c_int) :: i,j,k
     if( n > n3 ) return
+#ifdef OMP_TARGET
+!$omp target data map(c, r)
+#endif
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
+    do j=1,n
     do k=1,n-2
-      r(:,:,k+1) = r(:,:,k+1) - r(:,:,k)*c(k+1,2)
-      r(:,:,k+2) = r(:,:,k+2) - r(:,:,k)*c(k+2,1)
+      r(:,j,k+1) = r(:,j,k+1) - r(:,j,k)*c(k+1,2)
+      r(:,j,k+2) = r(:,j,k+2) - r(:,j,k)*c(k+2,1)
     end do
-    r(:,:,n) = (r(:,:,n) - r(:,:,n-1)*c(n,2))*c(n,3)
-    r(:,:,n-1) = (r(:,:,n-1) - c(n-1,4)*r(:,:,n))*c(n-1,3)
+    r(:,j,n) = (r(:,j,n) - r(:,j,n-1)*c(n,2))*c(n,3)
+    r(:,j,n-1) = (r(:,j,n-1) - c(n-1,4)*r(:,j,n))*c(n-1,3)
     do k=n-2,1,-1
-      r(:,:,k) = (r(:,:,k) - c(k,4)*r(:,:,k+1) - c(k,5)*r(:,:,k+2))*c(k,3)
+      r(:,j,k) = (r(:,j,k) - c(k,4)*r(:,j,k+1) - c(k,5)*r(:,j,k+2))*c(k,3)
     end do
+    end do
+#ifdef OMP_TARGET
+!$omp end target data
+#endif
   end subroutine bpentLUS3z
 
 

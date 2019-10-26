@@ -1980,9 +1980,12 @@ contains
     endif
   end function eval_compact_op1x_d1t
 
-  function eval_compact_op1x_d1(op,v,vb1,vb2,dv1,dv2) result(dv) ! nor=3, nol=2, uses 1D op type
+  function eval_compact_op1x_d1(op,v,vb1,vb2,dv1,dv2)  result(dv)! nor=3, nol=2, uses 1D op type
+! subroutine eval_compact_op1x_d1(ax,ay,az,op,v,dv,vb1,vb2,dv1,dv2) 
     implicit none
     class(compact_op1_d1), intent(in) :: op
+!   integer, intent(in) :: ax,ay,az
+    integer :: ax,ay,az
     real(kind=c_double), dimension(:,:,:), intent(in) :: v
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2 ! ghost values
     real(kind=c_double), dimension(:,:), intent(in), optional :: dv1,dv2 ! boundary values
@@ -1992,15 +1995,15 @@ contains
     real(kind=c_double), dimension(:,:,:,:), allocatable :: dvo
     real(kind=c_double), dimension(size(v,2),size(v,1)) :: dv_tran
     integer :: nb,nsr,i,j,k
-    integer :: ax,ay,az,nor,nir,nr,nol,nl,ni,np  ! surrogates
+    integer :: nor,nir,nr,nol,nl,ni,np  ! surrogates
     character(len=160) :: filename
 !---------------------------------------------------------------------------------------------------
+    ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
     IF (op%null_op) THEN
       dv = zero
 !      print *,'null op in x'
       RETURN
     END IF
-    ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
     if( ax /= op%m ) then
       print *,'*** error: mismatch in x operation size ***',ax,op%m
       stop
@@ -2016,6 +2019,11 @@ contains
     ! explicit part
     allocate( vbr1(3,ay,az),vbr2(3,ay,az) )
     allocate( vbs1(3,ay,az),vbs2(3,ay,az) )
+      allocate( dvop(4,ay,az), dvo(4,ay,az,0:np-1) )
+#ifdef OMP_TARGET
+!$omp target data map(to:dv,v)        &
+!$omp&            map(alloc:vbr1,vbr2,dvop,dvo)
+#endif
     if( np > 1 ) then  ! use parallel solver
       vbs2 = v(ax-2:ax,:,:)
       vbs1 = v(1:3,:,:)
@@ -2049,11 +2057,13 @@ contains
         vbr2 = zero  ! no data or symmetry
       endif
     endif
-    deallocate( vbs1,vbs2 )
 !    if( op%lo == MPI_PROC_NULL ) vbr1 = zero  ! lower non-periodic boundary, no data
 !    if( op%hi == MPI_PROC_NULL ) vbr2 = zero  ! upper non-periodic boundary, no data
      if( op%lo == MPI_PROC_NULL ) then ! boundary weights
      if( op%bc(1) == -1 ) then ! this BC is antisymmetric
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do j=1,ay
       dv(1,j,k) = sum(op%ar(4:7,1)*v(1:4,j,k))
@@ -2062,6 +2072,9 @@ contains
      end do
      end do
      else
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do j=1,ay
       dv(1,j,k) = sum(op%ar(5:7,1)*(v(2:4,j,k)-v(1,j,k)))
@@ -2071,6 +2084,9 @@ contains
      end do
      endif
     else ! centered interior weights
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do j=1,ay
       dv(1,j,k) = op%ar(5,1)*(v(2,j,k)-vbr1(3,j,k))+op%ar(6,1)*(v(3,j,k)-vbr1(2,j,k))+op%ar(7,1)*(v(4,j,k)-vbr1(1,j,k))
@@ -2079,6 +2095,9 @@ contains
      end do
      end do
     endif
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
     do k=1,az
     do j=1,ay
     do i=4,ax-3
@@ -2088,6 +2107,9 @@ contains
     end do
     if( op%hi == MPI_PROC_NULL ) then ! boundary weights
      if( op%bc(2) == -1 ) then ! this BC is antisymmetric
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do j=1,ay
       dv(ax-2,j,k) = sum(op%ar(1:6,ax-2)*v(ax-5:ax,j,k))
@@ -2096,6 +2118,9 @@ contains
      end do
      end do
      else
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do j=1,ay
       dv(ax-2,j,k) = op%ar(1,ax-2)*(v(ax-5,j,k)-v(ax,j,k))+op%ar(2,ax-2)*(v(ax-4,j,k)-v(ax,j,k))+op%ar(3,ax-2)*(v(ax-3,j,k)-v(ax-1,j,k))
@@ -2105,6 +2130,9 @@ contains
      end do
      endif
     else ! centered interior weights
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do j=1,ay
       dv(ax-2,j,k) = op%ar(5,ax-2)*(v(ax-1,j,k)-v(ax-3,j,k))+op%ar(6,ax-2)*(v(ax,j,k)-v(ax-4,j,k))+op%ar(7,ax-2)*(vbr2(1,j,k)-v(ax-5,j,k))
@@ -2113,11 +2141,10 @@ contains
      end do
      end do
     endif
-    deallocate( vbr1,vbr2 )
     ! this is only appropriate for explicit bc
     if( (op%lo == MPI_PROC_NULL) .and. abs(op%bc(1)) /= 1 .and. present(dv1)) dv(1,:,:)=dv1   ! supply lower solution
     if( (op%hi == MPI_PROC_NULL) .and. abs(op%bc(2)) /= 1 .and. present(dv2)) dv(ax,:,:)=dv2  ! supply upper solution
-    if( .not. op%implicit_op ) return
+    if( .not. op%implicit_op ) go to 99999
     ! implicit part
     if( np == 1 .and. op%periodic ) then
       if (bpp_lus_opt) then
@@ -2144,7 +2171,6 @@ contains
       endif
     endif
     if( np > 1 ) then  ! use parallel solver
-      allocate( dvop(4,ay,az), dvo(4,ay,az,0:np-1) )
       dvop(1:2,:,:) = dv(1:2,:,:)
       dvop(3:4,:,:) = dv(ax-1:ax,:,:)
       if( op%lo == MPI_PROC_NULL ) dvop(1:2,:,:) = zero
@@ -2161,6 +2187,10 @@ contains
           call btrid_block4_lus( op%aa, dvo, np, ay, az )
         endif
         if ((op%lo /= MPI_PROC_NULL) .and. (op%hi /= MPI_PROC_NULL)) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2170,6 +2200,10 @@ contains
            end do
            end do
         else if (op%lo /= MPI_PROC_NULL) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2178,6 +2212,10 @@ contains
            end do
            end do
         else if (op%hi /= MPI_PROC_NULL) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2213,13 +2251,22 @@ contains
         if( op%hi == MPI_PROC_NULL ) dvop(3:4,:,:) = zero
         forall(i=1:ax,j=1:ay,k=1:az) dv(i,j,k) = dv(i,j,k)-sum(op%rc(i,:)*dvop(:,j,k))
       end select
-      deallocate( dvop, dvo )
     endif
+99999 continue
+#ifdef OMP_TARGET
+!$omp end target data
+#endif
+      deallocate( dvop, dvo )
+    deallocate( vbr1,vbr2 )
+    deallocate( vbs1,vbs2 )
   end function eval_compact_op1x_d1
 
-  function eval_compact_op1y_d1(op,v,vb1,vb2,dv1,dv2) result(dv) ! nor=3, nol=2, uses 1D op type
+  function eval_compact_op1y_d1(op,v,vb1,vb2,dv1,dv2)  result(dv)! nor=3, nol=2, uses 1D op type
+! subroutine eval_compact_op1y_d1(ax,ay,az,op,v,dv,vb1,vb2,dv1,dv2) 
     implicit none
     class(compact_op1_d1), intent(in) :: op
+!   integer, intent(in) :: ax,ay,az
+1   integer :: ax,ay,az
     real(kind=c_double), dimension(:,:,:), intent(in) :: v
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2 ! ghost values
     real(kind=c_double), dimension(:,:), intent(in), optional :: dv1,dv2 ! boundary values
@@ -2228,14 +2275,14 @@ contains
     real(kind=c_double), dimension(:,:,:), allocatable :: dvop
     real(kind=c_double), dimension(:,:,:,:), allocatable :: dvo
     integer :: nb,nsr,i,j,k
-    integer :: ax,ay,az,nor,nir,nr,nol,nl,ni,np  ! surrogates
+    integer :: nor,nir,nr,nol,nl,ni,np  ! surrogates
 !---------------------------------------------------------------------------------------------------
+    ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
     IF (op%null_op) THEN
       dv = zero
 !      print *,'null op in y'
       RETURN
     END IF
-    ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
     if( ay /= op%m ) then
       print *,'*** error: mismatch in y operation size ***',ax,op%m
       stop
@@ -2251,6 +2298,11 @@ contains
 ! ghost data
     allocate( vbr1(ax,3,az),vbr2(ax,3,az) )
     allocate( vbs1(ax,3,az),vbs2(ax,3,az) )
+      allocate( dvop(4,ax,az), dvo(4,ax,az,0:op%np-1) )
+#ifdef OMP_TARGET
+!$omp target data map(to:dv,v)   &
+!$omp&            map(alloc:vbr1,vbr2,dvop,dvo)
+#endif
     ! explicit part
     if( op%np > 1 ) then  ! use parallel solver
       vbs2 = v(:,ay-2:ay,:)
@@ -2285,11 +2337,13 @@ contains
         vbr2 = zero  ! no data or symmetry
       endif
     endif
-    deallocate( vbs1,vbs2 )
 !    if( op%lo == MPI_PROC_NULL ) vbr1 = zero  ! lower non-periodic boundary, no data
 !    if( op%hi == MPI_PROC_NULL ) vbr2 = zero  ! upper non-periodic boundary, no data
     if( op%lo == MPI_PROC_NULL ) then
      if( op%bc(1) == -1 ) then ! this BC is antisymmetric
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do i=1,ax
       dv(i,1,k) = sum(op%ar(4:7,1)*v(i,1:4,k))
@@ -2298,6 +2352,9 @@ contains
      end do
      end do
      else
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do i=1,ax
       dv(i,1,k) = sum(op%ar(5:7,1)*(v(i,2:4,k)-v(i,1,k)))
@@ -2307,6 +2364,9 @@ contains
      end do
      endif
     else ! centered interior weights
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do i=1,ax
       dv(i,1,k) = op%ar(5,1)*(v(i,2,k)-vbr1(i,3,k))+op%ar(6,1)*(v(i,3,k)-vbr1(i,2,k))+op%ar(7,1)*(v(i,4,k)-vbr1(i,1,k))
@@ -2315,6 +2375,9 @@ contains
      end do
      end do
     endif
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
     do k=1,az
     do j=4,ay-3
     do i=1,ax
@@ -2324,6 +2387,9 @@ contains
     end do
     if( op%hi == MPI_PROC_NULL ) then
      if( op%bc(2) == -1 ) then ! this BC is antisymmetric
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do i=1,ax
       dv(i,ay-2,k) = sum(op%ar(1:6,ay-2)*v(i,ay-5:ay,k))
@@ -2332,6 +2398,9 @@ contains
      end do
      end do
      else
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do i=1,ax
       dv(i,ay-2,k) = op%ar(1,ay-2)*(v(i,ay-5,k)-v(i,ay,k))+op%ar(2,ay-2)*(v(i,ay-4,k)-v(i,ay,k))+op%ar(3,ay-2)*(v(i,ay-3,k)-v(i,ay-1,k))
@@ -2341,6 +2410,9 @@ contains
      end do
      endif
     else ! centered interior weights
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do k=1,az
      do i=1,ax
       dv(i,ay-2,k) = op%ar(5,ay-2)*(v(i,ay-1,k)-v(i,ay-3,k))+op%ar(6,ay-2)*(v(i,ay,k)-v(i,ay-4,k))+op%ar(7,ay-2)*(vbr2(i,1,k)-v(i,ay-5,k))
@@ -2349,10 +2421,16 @@ contains
      end do
      end do
     endif
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(dv)
+#endif
+       print *,'inside eval_compact_op1y_d1-uptop', sum(dv)
+#endif
     ! this is only appropriate for explicit bc
     if( (op%lo == MPI_PROC_NULL) .and. abs(op%bc(1)) /= 1 .and. present(dv1)) dv(:,1,:)=dv1     ! supply lower solution
     if( (op%hi == MPI_PROC_NULL) .and. abs(op%bc(2)) /= 1 .and. present(dv2)) dv(:,ay+1,:)=dv2  ! supply upper solution
-    if( .not. op%implicit_op ) return
+    if( .not. op%implicit_op ) go to 99999
     ! implicit part
     if( op%np == 1 .and. op%periodic ) then
        if (bpp_lus_opt) then
@@ -2364,7 +2442,6 @@ contains
        call bpentLUS3y(op%al,dv,op%m,ax,ay,az)  ! locally non-periodic solution
     endif
     if( op%np > 1 ) then  ! use parallel solver
-      allocate( dvop(4,ax,az), dvo(4,ax,az,0:op%np-1) )
       do k=1,az
       do i=1,ax
         dvop(1:2,i,k) = dv(i,1:2,k)
@@ -2385,6 +2462,10 @@ contains
           call btrid_block4_lus( op%aa, dvo, op%np, ax, az )
         endif
         if ((op%lo /= MPI_PROC_NULL) .and. (op%hi /= MPI_PROC_NULL)) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2394,6 +2475,10 @@ contains
            end do
            end do
         else if (op%lo /= MPI_PROC_NULL) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2402,6 +2487,10 @@ contains
            end do
            end do
         else if (op%hi /= MPI_PROC_NULL) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2437,13 +2526,26 @@ contains
         if( op%hi == MPI_PROC_NULL ) dvop(3:4,:,:) = zero
         forall(i=1:ax,j=1:ay,k=1:az) dv(i,j,k) = dv(i,j,k)-sum(op%rc(j,:)*dvop(:,i,k))
       end select
-      deallocate( dvop, dvo )
     endif
+99999 continue
+#ifdef OMP_TARGET
+#ifdef DEBUG
+!$omp target update from(dv)
+       print *,'inside eval_compact_op1y_d1', sum(dv)
+#endif
+!$omp end target data
+#endif
+      deallocate( dvop, dvo )
+    deallocate( vbs1,vbs2 )
+    deallocate( vbr1,vbr2 )
   end function eval_compact_op1y_d1
 
-  function eval_compact_op1z_d1(op,v,vb1,vb2,dv1,dv2) result(dv) ! nor=3, nol=2, uses 1D op type
+  function eval_compact_op1z_d1(op,v,vb1,vb2,dv1,dv2) result(dv)! nor=3, nol=2, uses 1D op type
+!  subroutine eval_compact_op1z_d1(ax,ay,az,op,v,dv,vb1,vb2,dv1,dv2) 
     implicit none
     class(compact_op1_d1), intent(in) :: op
+!    integer, intent(in) :: ax,ay,az
+     integer :: ax,ay,az
     real(kind=c_double), dimension(:,:,:), intent(in) :: v
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2 ! ghost values
     real(kind=c_double), dimension(:,:), intent(in), optional :: dv1,dv2 ! boundary values
@@ -2452,14 +2554,14 @@ contains
     real(kind=c_double), dimension(:,:,:), allocatable :: dvop
     real(kind=c_double), dimension(:,:,:,:), allocatable :: dvo
     integer :: nb,nsr,i,j,k
-    integer :: ax,ay,az,nor,nir,nr,nol,nl,ni,np  ! surrogates
+    integer :: nor,nir,nr,nol,nl,ni,np  ! surrogates
 !---------------------------------------------------------------------------------------------------
+    ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
     IF (op%null_op) THEN
       dv = zero
 !      print *,'null op in z'
       RETURN
     END IF
-    ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
     if( az /= op%m ) then
       print *,'*** error: mismatch in z operation size ***',ax,op%m
       stop
@@ -2476,6 +2578,11 @@ contains
 ! ghost data
     allocate( vbr1(ax,ay,3),vbr2(ax,ay,3) )
     allocate( vbs1(ax,ay,3),vbs2(ax,ay,3) )
+      allocate( dvop(4,ax,ay), dvo(4,ax,ay,0:op%np-1) )
+#ifdef OMP_TARGET
+!$omp target data map(to:dv,v)   &
+!$omp&            map(alloc:vbr1,vbr2,dvop,dvo)
+#endif
     if( np > 1 ) then  ! use parallel solver
       vbs2 = v(:,:,az-2:az)
       vbs1 = v(:,:,1:3)
@@ -2509,11 +2616,13 @@ contains
         vbr2 = zero  ! no data or symmetry
       endif
     endif
-    deallocate( vbs1,vbs2 )
 !    if( op%lo == MPI_PROC_NULL ) vbr1 = zero  ! lower non-periodic boundary, no data
 !    if( op%hi == MPI_PROC_NULL ) vbr2 = zero  ! upper non-periodic boundary, no data
     if( op%lo == MPI_PROC_NULL ) then
      if( op%bc(1) == -1 ) then ! this BC is antisymmetric
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do j=1,ay
      do i=1,ax
       dv(i,j,1) = sum(op%ar(4:7,1)*v(i,j,1:4))
@@ -2522,6 +2631,9 @@ contains
      end do
      end do
      else
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do j=1,ay
      do i=1,ax
       dv(i,j,1) = sum(op%ar(5:7,1)*(v(i,j,2:4)-v(i,j,1)))
@@ -2531,6 +2643,9 @@ contains
      end do
      endif
     else ! centered interior weights
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do j=1,ay
      do i=1,ax
       dv(i,j,1) = op%ar(5,1)*(v(i,j,2)-vbr1(i,j,3))+op%ar(6,1)*(v(i,j,3)-vbr1(i,j,2))+op%ar(7,1)*(v(i,j,4)-vbr1(i,j,1))
@@ -2539,6 +2654,9 @@ contains
      end do
      end do
     endif
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
     do k=4,az-3
     do j=1,ay
     do i=1,ax
@@ -2548,6 +2666,9 @@ contains
     end do
     if( op%hi == MPI_PROC_NULL ) then
      if( op%bc(2) == -1 ) then ! this BC is antisymmetric
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do j=1,ay
      do i=1,ax
       dv(i,j,az-2) = sum(op%ar(1:6,az-2)*v(i,j,az-5:az))
@@ -2556,6 +2677,9 @@ contains
      end do
      end do
      else
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do j=1,ay
      do i=1,ax
       dv(i,j,az-2) = op%ar(1,az-2)*(v(i,j,az-5)-v(i,j,az))+op%ar(2,az-2)*(v(i,j,az-4)-v(i,j,az))+op%ar(3,az-2)*(v(i,j,az-3)-v(i,j,az-1))
@@ -2565,6 +2689,9 @@ contains
      end do
      endif
     else ! centered interior weights
+#ifdef OMP_TARGET
+!$omp target teams distribute
+#endif
      do j=1,ay
      do i=1,ax
       dv(i,j,az-2) = op%ar(5,az-2)*(v(i,j,az-1)-v(i,j,az-3))+op%ar(6,az-2)*(v(i,j,az)-v(i,j,az-4))+op%ar(7,az-2)*(vbr2(i,j,1)-v(i,j,az-5))
@@ -2573,11 +2700,10 @@ contains
      end do
      end do
     endif
-    deallocate( vbr1,vbr2 )
     ! this is only appropriate for explicit bc
     if( (op%lo == MPI_PROC_NULL) .and. abs(op%bc(1)) /= 1 .and. present(dv1)) dv(:,:,1)=dv1   ! supply lower solution
     if( (op%hi == MPI_PROC_NULL) .and. abs(op%bc(2)) /= 1 .and. present(dv2)) dv(:,:,az)=dv2  ! supply upper solution
-    if( .not. op%implicit_op ) return
+    if( .not. op%implicit_op ) go to 99999
     ! implicit part
     if( op%np == 1 .and. op%periodic ) then
        if (bpp_lus_opt) then
@@ -2589,7 +2715,6 @@ contains
       call bpentLUS3z(op%al,dv,op%m,ax,ay,az)  ! locally non-periodic solution
     endif
     if( op%np > 1 ) then  ! use parallel solver
-      allocate( dvop(4,ax,ay), dvo(4,ax,ay,0:op%np-1) )
       do k=1,2
         dvop(k,:,:) = dv(:,:,k)
         dvop(2+k,:,:) = dv(:,:,az-2+k)
@@ -2608,6 +2733,10 @@ contains
           call btrid_block4_lus( op%aa, dvo, op%np, ax, ay )
         endif
         if ((op%lo /= MPI_PROC_NULL) .and. (op%hi /= MPI_PROC_NULL)) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2617,6 +2746,10 @@ contains
            end do
            end do
         else if (op%lo /= MPI_PROC_NULL) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2625,6 +2758,10 @@ contains
            end do
            end do
         else if (op%hi /= MPI_PROC_NULL) then
+#ifdef OMP_TARGET
+!$omp target update to(dv,dvo)
+!$omp target teams distribute
+#endif
            do k = 1, az
            do j = 1, ay
            do i = 1, ax
@@ -2660,8 +2797,14 @@ contains
         if( op%hi == MPI_PROC_NULL ) dvop(3:4,:,:) = zero
         forall(i=1:ax,j=1:ay,k=1:az) dv(i,j,k) = dv(i,j,k)-sum(op%rc(k,:)*dvop(:,i,j))
       end select
-      deallocate( dvop, dvo )
     endif
+99999 continue
+#ifdef OMP_TARGET
+!$omp end target data
+#endif
+      deallocate( dvop, dvo )
+    deallocate( vbr1,vbr2 )
+    deallocate( vbs1,vbs2 )
   end function eval_compact_op1z_d1
 
 ! "optimized" r3 operators for backward compatibility with matrix.f

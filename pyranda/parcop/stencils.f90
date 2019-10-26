@@ -1383,7 +1383,7 @@ contains
       is%ali = ali7 ; is%alb1 = alb1 ; is%alb2 = alb2
       is%ari = ari7 ; is%arb1 = arb1 ; is%arb2 = arb2
     else  ! reverse order
-      is%ali = ali7(ncl:1:-1) ; is%ari = ari7(ncr:1:-1)
+      is%ali(1:ncl:1) = ali7(ncl:1:-1) ; is%ari(1:ncr:1) = ari7(ncr:1:-1)
       is%alb1(:,1,:) = alb2(ncl:1:-1,4,:) ; is%alb2(:,1,:) = alb1(ncl:1:-1,4,:)
       is%alb1(:,2,:) = alb2(ncl:1:-1,3,:) ; is%alb2(:,2,:) = alb1(ncl:1:-1,3,:)
       is%alb1(:,3,:) = alb2(ncl:1:-1,2,:) ; is%alb2(:,3,:) = alb1(ncl:1:-1,2,:)

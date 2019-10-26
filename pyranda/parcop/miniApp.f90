@@ -1,4 +1,5 @@
 PROGRAM miniApp
+
   USE iso_c_binding
   USE LES_comm, ONLY : LES_comm_world
   USE LES_objects
@@ -7,6 +8,7 @@ PROGRAM miniApp
   USE LES_ghost, ONLY : ghostx,ghosty,ghostz
   IMPLICIT NONE
   INCLUDE "mpif.h"
+
   
   INTEGER(c_int)                 :: nx,ny,nz,px,py,pz,ax,ay,az,ns
   REAL(c_double)                 :: x1,xn,y1,yn,z1,zn
@@ -28,7 +30,7 @@ PROGRAM miniApp
   CHARACTER(LEN=32) :: arg
   INTEGER :: nargs,ii,iterations
   INTEGER :: rank,ierror,procs
-  DOUBLE PRECISION :: dt = 0.0, myCommTime, myCompTime,myTime,myTimeMin,myTimeMean
+  DOUBLE PRECISION :: dt = 1.0e-9, myCommTime, myCompTime,myTime,myTimeMin,myTimeMean
   LOGICAL :: arraySyntax = .false.
 
   LOGICAL :: uberComm = .false.
@@ -204,21 +206,20 @@ PROGRAM miniApp
   ! rho = x
   rad = SQRT( ( mesh_ptr%xgrid - 0.5 )**2 + ( mesh_ptr%ygrid - 0.5 )**2 + ( mesh_ptr%zgrid - 0.5 )**2 )
   rho = (1.0 - TANH( (rad - .25 ) / .05 ))*0.5 + 1.0
-  u = 0.0
-  v = 0.0
-  w = 0.0
-  ie = 1.0
-  Y = 1.0
+  u = 0.01
+  v = 0.01
+  w = 0.01
+  ie = 1.01
+  Y = 1.01
 
   CALL EOS(ie,rho,p,t)
-  
-  ! From(device to host) To(host to device)
-  !$omp target data map(to:RHS,u,v,w,Y,p,rho,et,ie,T) &
-  !$omp             map(to:mesh_ptr%GridLen) &
-  !$omp             map(alloc:Fx,Fy,Fz,Fxx,Fxy,Fxz,Fyx,Fyy,Fyz,Fzx,Fzy,Fzz,tmp,bar) &
-  !$omp             map(alloc:uxx,uyy,uzz,uxy,uxz,uyz,uyx,uzx,uzy) &
-  !$omp             map(alloc:beta,mu,kappa,tx,ty,tz)
-  
+ 
+#ifdef OMP_TARGET
+  !$omp target data map(from:RHS,u,v,w,Y,p,rho,et) &
+  !$omp&      map(alloc:Fx,Fy,Fz,Fxx,Fxy,Fxz,Fyx,Fyy,Fyz,Fzx,Fzy,Fzz,uxx,uyy,uzz,Uxy,uyz,uyx,uzx,uzy,uxz,tx,ty,tz,bar,tmp)
+#endif
+
+
   
   ! Time the derivatives
   CALL SYSTEM_CLOCK( t1, clock_rate, clock_max)
@@ -226,26 +227,30 @@ PROGRAM miniApp
   DO tt=1,iterations
 
 
-     if (uberComm) then
-        do eom=1,4+ns
-           CALL ghostx(1,RHSp(:,:,:,eom))
-           CALL ghosty(1,RHSp(:,:,:,eom))
-           CALL ghostz(1,RHSp(:,:,:,eom))
-        end do
-     end if
-        
+     do eom=1,4+ns
+        CALL ghostx(1,RHSp(:,:,:,eom))
+        CALL ghosty(1,RHSp(:,:,:,eom))
+        CALL ghostz(1,RHSp(:,:,:,eom))
+     end do
+
      
      CALL startCPU()
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO j=1,ay
-        DO k=1,az
-           DO i=1,ax
+#endif
+
+     DO i=1,ax
+        DO j=1,ay
+           DO k=1,az
               ie(i,j,k) = et(i,j,k) - .5 * rho(i,j,k) * &
                    (u(i,j,k)*u(i,j,k) + v(i,j,k)*v(i,j,k) + w(i,j,k)*w(i,j,k) )
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      CALL endCPU()
      
      CALL EOS(ie,rho,p,t)
@@ -254,106 +259,228 @@ PROGRAM miniApp
      ! Mass equation
      DO n=1,ns
         CALL startCPU()
+#ifdef OMP_TARGET
         !$omp target teams distribute parallel do collapse(3)
-        DO k=1,az           
+#endif
+
+        DO i=1,ax
            DO j=1,ay
-              DO i=1,ax
-                 Fx(i,j,k) = Y(i,j,k,ns) * rho(i,j,k) * u(i,j,k)
-                 Fy(i,j,k) = Y(i,j,k,ns) * rho(i,j,k) * v(i,j,k)
-                 Fz(i,j,k) = Y(i,j,k,ns) * rho(i,j,k) * w(i,j,k)
+              DO k=1,az
+                 Fx(i,j,k) = Y(i,j,k,n) * rho(i,j,k) * u(i,j,k)
+                 Fy(i,j,k) = Y(i,j,k,n) * rho(i,j,k) * v(i,j,k)
+                 Fz(i,j,k) = Y(i,j,k,n) * rho(i,j,k) * w(i,j,k)
               END DO
            END DO
         END DO
+#ifdef OMP_TARGET
         !$omp end target teams distribute parallel do
+#endif
+
         CALL endCPU()
 
         
-        CALL ddx(Fx,tmp,ax,ay,az)
+        CALL ddx(Fx,Fz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fz,Fx)
+#endif
+     print*,'after call to ddx-Fz', sum(Fz),sum(Fx)
+#endif
         CALL ddy(Fy,Fx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fx)
+#endif
+     print*,'after call to ddx-Fx', sum(Fx)
+#endif
+#ifdef OMP_TARGET
         !$omp target teams distribute parallel do collapse(3)
-        DO k=1,az     
+#endif
+
+        DO i=1,ax
            DO j=1,ay
-              DO i=1,ax
-                 Fx(i,j,k) = Fx(i,j,k) + tmp(i,j,k)
+              DO k=1,az     
+                 Fx(i,j,k) = Fx(i,j,k) + Fz(i,j,k)
               END DO
            END DO
         END DO
+#ifdef OMP_TARGET
         !$omp end target teams distribute parallel do
+#endif
+
         CALL ddz(Fz,Fy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fy)
+#endif
+     print*,'after call to ddx-Fy', sum(Fy)
+#endif
+#ifdef OMP_TARGET
         !$omp target teams distribute parallel do collapse(3)
-        DO k=1,az
+#endif
+
+        DO i=1,ax
            DO j=1,ay
-              DO i=1,ax
-                 RHS(i,j,k,4+ns) = Fx(i,j,k)+ Fy(i,j,k)
+              DO k=1,az
+                 RHS(i,j,k,4+n) = Fx(i,j,k)+ Fy(i,j,k)
               END DO
            END DO
         END DO
+#ifdef OMP_TARGET
         !$omp end target teams distribute parallel do
+#endif
+
      END DO
      
      ! Form the artificial viscosities
      CALL ddx(u,uxx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uxx)
+#endif
+     print*,'after call to ddx-uxx', sum(uxx)
+#endif
      CALL ddy(v,uyy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uyy)
+#endif
+     print*,'after call to ddy-uyy', sum(uyy)
+#endif
      CALL ddz(w,uzz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uzz)
+#endif
+     print*,'after call to ddz-uzz', sum(uzz)
+#endif
      CALL ddy(u,uxy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uxy)
+#endif
+     print*,'after call to ddy-uxy', sum(uxy)
+#endif
      CALL ddz(u,uxz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uxz)
+#endif
+     print*,'after call to ddz-uxz', sum(uxz)
+#endif
      CALL ddz(v,uyz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uyz)
+#endif
+     print*,'after call to ddz-uyz', sum(uyz)
+#endif
      CALL ddx(v,uyx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uyx)
+#endif
+     print*,'after call to ddx-uyx', sum(uyx)
+#endif
      CALL ddx(w,uzx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uzx)
+#endif
+     print*,'after call to ddx-uzx', sum(uzx)
+#endif
      CALL ddy(w,uzy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(uzy)
+#endif
+     print*,'after call to ddy-uzy', sum(uzy)
+#endif
 
      ! Shocks
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               Fx(i,j,k) = uxx(i,j,k) + uyy(i,j,k) + uzz(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      ! beta = Cb * rho abs( dd4( divU) * del^2 )*
      CALL dd4x( Fx, Fy, ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fy)
+#endif
+     print*,'after call to dd4x-Fy', sum(Fy)
+#endif
 
      CALL startCPU()
      
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               Fx(i,j,k) = ABS(Fy(i,j,k)) * mesh_ptr%GridLen(i,j,k)**2
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      CALL endCPU()
      
      CALL gFilter( Fx, Fy, ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fy)
+#endif
+     print*,'after call to gfilter-Fy', sum(Fy)
+#endif
 
      CALL startCPU()
      
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               beta(i,j,k) = rho(i,j,k) * Fy(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      CALL endCPU()
      
      CALL startCPU()
      
 
-     !$omp target teams distribute parallel do collapse(3) &
-     !$omp       private(divu,txx,tyy,tzz,txy,tyz,txz)
-     DO k=1,az
+#ifdef OMP_TARGET
+     !$omp target teams distribute parallel do collapse(3)
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
 
               divu = uxx(i,j,k) + uyy(i,j,k) + uzz(i,j,k)
               
@@ -383,93 +510,189 @@ PROGRAM miniApp
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
 
      CALL endCPU()
      
      !CALL div(Fxx,Fxy,Fxz,Fyx,Fyy,Fyz,Fzx,Fzy,Fzz, &
      !RHS(:,:,:,1),RHS(:,:,:,2),RHS(:,:,:,3) )
      
-     CALL ddx(Fxx,tmp,ax,ay,az)
+     CALL ddx(Fxx,Fz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fz)
+#endif
+     print*,'after call to ddx-Fz', sum(Fz)
+#endif
      CALL ddy(Fxy,Fx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fx)
+#endif
+     print*,'after call to ddy-Fx', sum(Fx)
+#endif
      !Fx = Fx + Fz
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az     
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
-              Fx(i,j,k) = Fx(i,j,k) + tmp(i,j,k)
+           DO k=1,az     
+              Fx(i,j,k) = Fx(i,j,k) + Fz(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      CALL ddz(Fxz,Fy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fy)
+#endif
+     print*,'after call to ddz-Fy', sum(Fy)
+#endif
      !RHS(:,:,:,1) = Fx + Fy
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               RHS(i,j,k,1) = Fx(i,j,k)+ Fy(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
 
-     CALL ddx(Fyx,tmp,ax,ay,az)
+
+     CALL ddx(Fyx,Fz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fz)
+#endif
+     print*,'after call to ddx-Fz', sum(Fz)
+#endif
      CALL ddy(Fyy,Fx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fx)
+#endif
+     print*,'after call to ddy-Fx', sum(Fx)
+#endif
      !Fx = Fx + Fz
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az     
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
-              Fx(i,j,k) = Fx(i,j,k) + tmp(i,j,k)
+           DO k=1,az     
+              Fx(i,j,k) = Fx(i,j,k) + Fz(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      CALL ddz(Fyz,Fy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fy)
+#endif
+     print*,'after call to ddz-Fy', sum(Fy)
+#endif
      !RHS(:,:,:,2) = Fx + Fy
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               RHS(i,j,k,2) = Fx(i,j,k)+ Fy(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
 
-     CALL ddx(Fzx,tmp,ax,ay,az)
+
+     CALL ddx(Fzx,Fz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fz)
+#endif
+     print*,'after call to ddx-Fz', sum(Fz)
+#endif
      CALL ddy(Fzy,Fx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fx)
+#endif
+     print*,'after call to ddy-Fx', sum(Fx)
+#endif
      !Fx = Fx + Fz
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az     
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
-              Fx(i,j,k) = Fx(i,j,k) + tmp(i,j,k)
+           DO k=1,az     
+              Fx(i,j,k) = Fx(i,j,k) + Fz(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      CALL ddz(Fzz,Fy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fy)
+#endif
+     print*,'after call to ddz-Fy', sum(Fy)
+#endif
      !RHS(:,:,:,3) = Fx + Fy
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               RHS(i,j,k,3) = Fx(i,j,k)+ Fy(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
 
      CALL startCPU()
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               ! Energy equation
               et(i,j,k) = ie(i,j,k) + .5 * rho(i,j,k) * &
                    & (u(i,j,k)*u(i,j,k) + v(i,j,k)*v(i,j,k) + w(i,j,k)*w(i,j,k) )
@@ -477,47 +700,101 @@ PROGRAM miniApp
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      CALL endCPU()
 
      
      !CALL grad(T,tx,ty,tz)
      CALL ddx( T, tx, ax, ay, az )
-     CALL ddy( T, tx, ax, ay, az )
-     CALL ddz( T, tx, ax, ay, az )
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(tx)
+#endif
+     print*,'after call to ddx', sum(tx)
+#endif
+     CALL ddy( T, ty, ax, ay, az )
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(ty)
+#endif
+     print*,'after call to ddx', sum(ty)
+#endif
+     CALL ddz( T, tz, ax, ay, az )
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(tz)
+#endif
+     print*,'after call to ddx', sum(tz)
+#endif
 
      CALL startCPU()
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               Fx(i,j,k) = et(i,j,k) * u(i,j,k) - tx(i,j,k)
               Fy(i,j,k) = et(i,j,k) * v(i,j,k) - ty(i,j,k)
               Fz(i,j,k) = et(i,j,k) * w(i,j,k) - tz(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      CALL endCPU()
      
      !CALL div(Fx,Fy,Fz,RHS(:,:,:,4))
-     CALL ddx(Fx,tmp,ax,ay,az)
+     CALL ddx(Fx,Fz,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fz)
+#endif
+     print*,'after call to ddx', sum(Fz)
+#endif
      CALL ddy(Fy,Fx,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fx)
+#endif
+     print*,'after call to ddy', sum(Fx)
+#endif
      !Fx = Fx + Fz
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az     
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
-              Fx(i,j,k) = Fx(i,j,k) + tmp(i,j,k)
+           DO k=1,az     
+              Fx(i,j,k) = Fx(i,j,k) + Fz(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
      
      CALL ddz(Fz,Fy,ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(Fy)
+#endif
+     print*,'after call to ddz', sum(Fy)
+#endif
      !RHS(:,:,:,4) = Fx + Fy
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
+#endif
+
      DO i=1,ax
         DO j=1,ay
            DO k=1,az
@@ -525,7 +802,10 @@ PROGRAM miniApp
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
 
      ! Integrate the equaions
      CALL startCPU()
@@ -538,46 +818,67 @@ PROGRAM miniApp
         w  = ( rho*w  - dt * RHS(:,:,:,3))/rho
         et = et - dt * RHS(:,:,:,4)
      else
-        !$omp target teams distribute parallel do collapse(3) 
-        DO k=1,az
+#ifdef OMP_TARGET
+        !$omp target teams distribute parallel do collapse(3)
+#endif
+
+        DO i=1,ax
            DO j=1,ay
-              DO i=1,ax
+              DO k=1,az
                  DO n=1,ns
-                    Y(i,j,k,n) = ( Y(i,j,k,n)*rho(i,j,k) - dt * RHS(i,j,k,4+n))/rho(i,j,k)
+                    Y(i,j,k,n) = ( Y(i,j,k,n)*rho(i,j,k) - dt * RHS(i,j,k,1))/rho(i,j,k)
                  END DO
-                 et(i,j,k) = et(i,j,k) - dt * RHS(i,j,k,4)
-                 u(i,j,k)  = ( rho(i,j,k)*u(i,j,k)  - dt * RHS(i,j,k,1))/rho(i,j,k)
+                 et(i,j,k) = et(i,j,k) - dt * RHS(i,j,k,5)
+                 u(i,j,k)  = ( rho(i,j,k)*u(i,j,k)  - dt * RHS(i,j,k,2))/rho(i,j,k)
                  v(i,j,k)  = ( rho(i,j,k)*v(i,j,k)  - dt * RHS(i,j,k,2))/rho(i,j,k)
-                 w(i,j,k)  = ( rho(i,j,k)*w(i,j,k)  - dt * RHS(i,j,k,3))/rho(i,j,k)
+                 w(i,j,k)  = ( rho(i,j,k)*w(i,j,k)  - dt * RHS(i,j,k,2))/rho(i,j,k)
               END DO
            END DO
         END DO
+#ifdef OMP_TARGET
         !$omp end target teams distribute parallel do
+#endif
+
      endif
      CALL endCPU()
      
      ! Filter the equations
      bar = 0.0
      DO n=1,ns
+#ifdef OMP_TARGET
         !$omp target teams distribute parallel do collapse(3)
-        DO k=1,az
+#endif
+
+        DO i=1,ax
            DO j=1,ay
-              DO i=1,ax
+              DO k=1,az
                  tmp(i,j,k) = rho(i,j,k)*Y(i,j,k,n)
               END DO
            END DO
         END DO
+#ifdef OMP_TARGET
         !$omp end target teams distribute parallel do
+#endif
+
         
         CALL sFilter( tmp,RHS(:,:,:,n), ax,ay,az)                
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(RHS(:,:,:,n))
+#endif
+     print*,'after call to sFilter', sum(RHS(:,:,:,n))
+#endif
         
      END DO
 
      CALL startCPU()
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               rho(i,j,k) = 0.0D0
               DO n=1,ns
                  rho(i,j,k) = rho(i,j,k) + RHS(i,j,k,n)
@@ -588,79 +889,133 @@ PROGRAM miniApp
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do     
+#endif
+
      !DO n=1,ns
      !   Y(:,:,:,n) = rhs(:,:,:,n)/rho
      !END DO
 
      
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               tmp(i,j,k) = rho(i,j,k)*u(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do
+#endif
+
         
      CALL endCPU()
     
 
      CALL sFilter( tmp, bar, ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(bar)
+#endif
+     print*,'after call to sFilter-bar', sum(bar)
+#endif
 
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               u(i,j,k) = bar(i,j,k) / rho(i,j,k)
               tmp(i,j,k) = rho(i,j,k)*v(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do    
+#endif
+
      !u = bar / rho
      !tmp = rho*v
 
      
      CALL sFilter( tmp, bar, ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(bar)
+#endif
+     print*,'after call to sFilter-bar2', sum(bar)
+#endif
      
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               v(i,j,k) = bar(i,j,k) / rho(i,j,k)
               tmp(i,j,k) = rho(i,j,k)*w(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do    
+#endif
+
      !v = bar / rho     
      !tmp = rho*w
 
 
      CALL sFilter( tmp, bar, ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(bar)
+#endif
+     print*,'after call to sFilter-bar3', sum(bar)
+#endif
 
 
+#ifdef OMP_TARGET
      !$omp target teams distribute parallel do collapse(3)
-     DO k=1,az
+#endif
+
+     DO i=1,ax
         DO j=1,ay
-           DO i=1,ax
+           DO k=1,az
               w(i,j,k) = bar(i,j,k) / rho(i,j,k)
               tmp(i,j,k) = et(i,j,k)
            END DO
         END DO
      END DO
+#ifdef OMP_TARGET
      !$omp end target teams distribute parallel do 
+#endif
+
      !w = bar / rho     
      !tmp = et     
      
      CALL sFilter( tmp, et, ax,ay,az)
+#ifdef DEBUG
+#ifdef OMP_TARGET
+!$omp target update from(et)
+#endif
+     print*,'after call to sFilter-et', sum(et)
+#endif
 
      
   END DO
 
+#ifdef OMP_TARGET
   !$omp end target data
+#endif
+
 
   
   !CALL SYSTEM_CLOCK( t2, clock_rate, clock_max)
@@ -730,7 +1085,10 @@ SUBROUTINE EOS(ie,rho,p,T)
   DOUBLE PRECISION :: gamma = 1.4
   INTEGER :: i,j,k
 
-  !$omp target teams distribute parallel do collapse(3) private(gamma)
+#ifdef OMP_TARGET
+  !$omp target teams distribute collapse(3)
+#endif
+
   DO i=1,size(p,1)
      DO j=1,size(p,2)
         DO k=1,size(p,3)
@@ -739,7 +1097,6 @@ SUBROUTINE EOS(ie,rho,p,T)
         END DO
      END DO
   END DO
-  !$omp end target teams distribute parallel do
   
 END SUBROUTINE EOS
 

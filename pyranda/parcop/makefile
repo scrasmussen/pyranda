@@ -28,24 +28,14 @@ blueos_3_ppc64le_ib.ibm.mpif90 = /usr/tce/packages/spectrum-mpi/spectrum-mpi-201
 blueos_3_ppc64le_ib.gnu.mpif90 = /usr/tcetmp/bin/mpigfortran
 blueos_3_ppc64le_ib.python     = /usr/tcetmp/bin/python
 
-gnu.fflags   = -fPIC -ffree-form -ffree-line-length-0 -fbackslash -ffast-math -O3
-intel.fflags = -fPIC #-O3
+gnu.fflags   = -fPIC -ffree-form -ffree-line-length-0 -fbackslash
+intel.fflags = -fPIC
 # it's likely that mpiclang is using gfortran
 clang.fflags = $(gnu.fflags)
-ibm.linkflags = -qoffload -W@,-v -qsmp=omp 
-ibm.fflags   = -fPIC -qxlf2003=polymorphic $(ibm.linkflags)
+ibm.fflags   = -fPIC -qxlf2003=polymorphic
 ibm.lopts    = -qmkshrobj
 pgi.fflags   = -fPIC
-
-sys_type = $(call use-if,$(SYS_TYPE),$(shell uname))
-python  ?= $(call use-if,$($(compiler).$(sys_type).python),$(shell which python))
-mpif90  ?= $(call use-if,$($(sys_type).$(compiler).mpif90),$(shell which mpif90))
-fcomp   ?= $(call use-if,$(compiler),$(shell ./vendor.sh $(mpif90)))
-mpicc   ?= $(dir $(mpif90))mpicc
-ccomp   ?= $(call use-if,$(compiler),$(shell ./vendor.sh $(mpicc)))
-# make sure we use this python's f2py unless the user wants something else
-f2py    ?= $(python) -c 'import numpy.f2py; numpy.f2py.main()'
-fflags  ?= $($(fcomp).fflags)
+mpif90=ftn -eF -ef -rm   -Ofast -homp -DOMP_TARGET  -L/cm/shared/apps/cuda10.1/toolkit/10.1.168/extras/CUPTI/lib64 -lcupti
 lopts   ?= $(call use-if,$($(fcomp).lopts),-shared)
 
 #
@@ -67,8 +57,8 @@ f2py.Iflags  = -I$(f2py.dir)
 #
 # source order is important because of mod file dependencies
 #
-source = blockmath.o stencils.o patch.o timers.o pentadiagonal.o explicit.o \
-	     comm.o compact.o mesh.o objects.o ghost.o compact_operators.o \
+source = blockmath.o stencils.o patch.o pentadiagonal.o \
+	     comm.o compact.o mesh.o objects.o compact_operators.o \
 			 operators.o
 
 vpath %.c $(f2py.dir)
@@ -104,7 +94,7 @@ test_pent: libparcop.a parcop.o test_pent.o
 	$(mpif90) test_pent.o parcop.o libparcop.a -o $@
 
 miniApp: libparcop.a parcop.o miniApp.o
-	$(mpif90) $(ibm.linkflags) miniApp.o parcop.o libparcop.a -o $@
+	$(mpif90) miniApp.o parcop.o libparcop.a timers.o ghost.o explicit.o -o $@
 
 info:
 	@echo "sys_type:  $(sys_type)"

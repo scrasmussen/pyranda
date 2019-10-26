@@ -24,11 +24,33 @@ contains
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2
     integer(c_int), intent(in), optional :: bc
     integer(c_int) :: iop,i,j,k
+!   integer :: ax, ay, az
+!   ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
+#ifdef OMP_TARGET
+!!!!$omp declare target(eval_compact_op1x_d1)
+!$omp target data map(v,dv)
+#endif
     ! perform operation?
     if( compact_ops%control%null_opx ) then
+#ifdef OMP_TARGET
+!$omp target
+#endif
       dv = zero
-      return
+#ifdef OMP_TARGET
+!$omp end target
+#ifdef DEBUG
+!$omp target update from(v)
+       print *,'inside d1x', sum(v)
+#endif
+#endif
+      go to 99999
     endif
+#ifdef OMP_TARGET
+#ifdef DEBUG
+!$omp target update from(v)
+       print *,'inside d1x-v', sum(v)
+#endif
+#endif
     ! symmetry option
     iop = 1
     if( present(bc) ) then
@@ -36,11 +58,38 @@ contains
       if( bc == -1 .and. allocated(compact_ops%d1x(2)%ar) ) iop = 2
  !     if( compact_ops%d1x(iop)%id == 0 ) print *,'using compact d1x(',iop,')'
     endif
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
     ! calculate grid derivative sans metric
-    dv = compact_ops%d1x(iop)%evalx(v,vb1,vb2)
+     dv = compact_ops%d1x(iop)%evalx(v,vb1,vb2)
+!   call eval_compact_op1x_d1(ax,ay,az,compact_ops%d1x(iop),v,dv,vb1,vb2)
     ! apply metric here or later? here d is scalar or size(dv,1)
-    forall(j=1:size(dv,2),k=1:size(dv,3)) dv(:,j,k) = dv(:,j,k)/compact_ops%dx
+!  forall(j=1:size(dv,2),k=1:size(dv,3)) dv(:,j,k) = dv(:,j,k)/compact_ops%dx
+#ifdef OMP_TARGET
+!$omp target update to(dv)
+#ifdef DEBUG
+!$omp target update from(dv)
+       print *,'inside d1x', sum(dv)
+#endif
+!$omp target teams distribute
+#endif
+    do k = 1,size(dv,3)
+    do j = 1,size(dv,2)
+    do i = 1,size(dv,1)
+    dv(i,j,k) = dv(i,j,k)/compact_ops%dx
+    enddo
+    enddo
+    enddo
     ! dv = dv/mesh_data%d1  ! 3D metric
+99999  continue
+#ifdef OMP_TARGET
+#ifdef DEBUG
+!$omp target update from(dv)
+       print *,'inside d1x', sum(dv)
+#endif
+!$omp end target data 
+#endif
   end subroutine d1x
 
   subroutine d1y(v,dv,bc,vb1,vb2)
@@ -50,10 +99,22 @@ contains
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2
     integer(c_int), intent(in), optional :: bc
     integer(c_int) :: iop,i,j,k
+!   integer :: ax, ay, az
+!   ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
     ! perform operation?
+#ifdef OMP_TARGET
+!!!!$omp declare target(eval_compact_op1y_d1)
+!$omp target data map(v,dv)
+#endif
     if( compact_ops%control%null_opy ) then
+#ifdef OMP_TARGET
+!$omp target
+#endif
       dv = zero
-      return
+#ifdef OMP_TARGET
+!$omp end target
+#endif
+      go to 99999
     endif
     ! symmetry option
     iop = 1
@@ -62,10 +123,29 @@ contains
       if( bc == -1 .and. allocated(compact_ops%d1y(2)%ar) ) iop = 2
     endif
     ! calculate grid derivative sans metric
-    dv = compact_ops%d1y(iop)%evaly(v,vb1,vb2)
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
+     dv = compact_ops%d1y(iop)%evaly(v,vb1,vb2)
+!   call eval_compact_op1y_d1(ax,ay,az,compact_ops%d1y(iop),v,dv,vb1,vb2)
     ! apply metric here or later? here d is scalar or size(dv,2)
-    forall(i=1:size(dv,1),k=1:size(dv,3)) dv(i,:,k) = dv(i,:,k)/compact_ops%dy
+!   forall(i=1:size(dv,1),k=1:size(dv,3)) dv(i,:,k) = dv(i,:,k)/compact_ops%dy
+#ifdef OMP_TARGET
+!$omp target update to(dv)
+!$omp target teams distribute
+#endif
+    do k = 1,size(dv,3)
+    do j = 1,size(dv,2)
+    do i = 1,size(dv,1)
+    dv(i,j,k) = dv(i,j,k)/compact_ops%dy
+    enddo
+    enddo
+    enddo
     ! dv = dv/mesh_data%d2  ! 3D metric
+99999  continue
+#ifdef OMP_TARGET
+!$omp end target data 
+#endif
   end subroutine d1y
 
   subroutine d1z(v,dv,bc,vb1,vb2)
@@ -75,10 +155,16 @@ contains
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2
     integer(c_int), intent(in), optional :: bc
     integer(c_int) :: iop,i,j,k
+!   integer :: ax, ay, az
+!   ax = size(v,1) ; ay = size(v,2) ; az = size(v,3)
+#ifdef OMP_TARGET
+!!!!$omp declare target(eval_compact_op1z_d1)
+!$omp target data map(v,dv)
+#endif
     ! perform operation?
     if( compact_ops%control%null_opz ) then
       dv = zero
-      return
+      go to 99999
     endif
     ! symmetry option
     iop = 1
@@ -86,10 +172,28 @@ contains
       if( bc > 0 ) iop = bc
       if( bc == -1 .and. allocated(compact_ops%d1z(2)%ar) ) iop = 2
     endif
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
     ! calculate grid derivative sans metric
-    dv = compact_ops%d1z(iop)%evalz(v,vb1,vb2)
+     dv = compact_ops%d1z(iop)%evalz(v,vb1,vb2)
+!   call eval_compact_op1z_d1(ax,ay,az,compact_ops%d1z(iop),v,dv,vb1,vb2)
     ! apply metric here or later? here d is scalar or size(dv,3)
-    forall(i=1:size(dv,1),j=1:size(dv,2)) dv(i,j,:) = dv(i,j,:)/compact_ops%dz
+#ifdef OMP_TARGET
+!$omp target update to(dv)
+!$omp target teams distribute
+#endif
+    do k = 1,size(dv,3)
+    do j = 1,size(dv,2)
+    do i = 1,size(dv,1)
+    dv(i,j,k) = dv(i,j,k)/compact_ops%dz
+    enddo
+    enddo
+    enddo
+99999  continue
+#ifdef OMP_TARGET
+!$omp end target data 
+#endif
     ! dv = dv/mesh_data%d3  ! 3D metric
   end subroutine d1z
 
@@ -323,9 +427,18 @@ contains
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2
     integer(c_int) :: iop,i,j,k
     ! perform operation?
+#ifdef OMP_TARGET
+!$omp target data map(fv,v,vb1,vb2)
+#endif
     if( compact_ops%control%null_opx ) then
+#ifdef OMP_TARGET
+!$omp target 
+#endif
       fv = v
-      return
+#ifdef OMP_TARGET
+!$omp end target 
+#endif
+      go to 99999
     endif
     ! symmetry option
     iop = 1
@@ -335,17 +448,39 @@ contains
     endif
     ! select filter
     if( nf == compact_ops%control%gfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%gfx(iop)%evalx(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
     if( nf == compact_ops%control%sfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%sfx(iop)%evalx(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
     if( nf == compact_ops%control%tfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%tfx(iop)%evalx(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
+99999  continue
+#ifdef OMP_TARGET
+!$omp end target data 
+#endif
   end subroutine filterx
 
   subroutine filtery(v,fv,nf,bc,vb1,vb2)
@@ -357,9 +492,18 @@ contains
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2
     integer(c_int) :: iop,i,j,k
     ! perform operation?
+#ifdef OMP_TARGET
+!$omp target data map(fv,v,vb1,vb2)
+#endif
     if( compact_ops%control%null_opy ) then
+#ifdef OMP_TARGET
+!$omp target 
+#endif
       fv = v
-      return
+#ifdef OMP_TARGET
+!$omp end target 
+#endif
+      go to 99999
     endif
     ! symmetry option
     iop = 1
@@ -369,17 +513,39 @@ contains
     endif
     ! select filter
     if( nf == compact_ops%control%gfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%gfy(iop)%evaly(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
     if( nf == compact_ops%control%sfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%sfy(iop)%evaly(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
     if( nf == compact_ops%control%tfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%tfy(iop)%evaly(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
+99999  continue
+#ifdef OMP_TARGET
+!$omp end target data 
+#endif
   end subroutine filtery
 
   subroutine filterz(v,fv,nf,bc,vb1,vb2)
@@ -390,10 +556,19 @@ contains
     integer(c_int), intent(in), optional :: bc
     real(kind=c_double), dimension(:,:,:), intent(in), optional :: vb1,vb2
     integer(c_int) :: iop,i,j,k
+#ifdef OMP_TARGET
+!$omp target data map(fv,v,vb1,vb2)
+#endif
     ! perform operation?
     if( compact_ops%control%null_opz ) then
+#ifdef OMP_TARGET
+!$omp target 
+#endif
       fv = v
-      return
+#ifdef OMP_TARGET
+!$omp end target
+#endif
+      go to 99999
     endif
     ! symmetry option
     iop = 1
@@ -403,17 +578,39 @@ contains
     endif
     ! select filter
     if( nf == compact_ops%control%gfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%gfz(iop)%evalz(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
     if( nf == compact_ops%control%sfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%sfz(iop)%evalz(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
     if( nf == compact_ops%control%tfspec ) then
+#ifdef OMP_TARGET
+!$omp target update from(v,vb1,vb2)
+#endif
       fv = compact_ops%tfz(iop)%evalz(v,vb1,vb2)
-      return
+#ifdef OMP_TARGET
+!$omp target update to(fv)
+#endif
+      go to 99999
     endif
+99999  continue
+#ifdef OMP_TARGET
+!$omp end target data 
+#endif
   end subroutine filterz
 
   subroutine islx(v,iv,bc,vb1,vb2,iv1,iv2)

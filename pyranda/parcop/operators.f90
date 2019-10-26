@@ -44,12 +44,21 @@
     DOUBLE PRECISION, DIMENSION(:,:,:), INTENT(IN) :: fx,fy,fz
     DOUBLE PRECISION, DIMENSION(:,:,:), INTENT(OUT) :: df
     DOUBLE PRECISION, DIMENSION(SIZE(df,1),SIZE(df,2),SIZE(df,3)) :: fA,fB,fC,tmp
+#ifdef OMP_TARGET
+!$omp target data map(fx,fy,fz,df,fA,fB,fC)
+#endif
      SELECT CASE(patch_ptr%coordsys)
-    CASE(0) ! Cartesian
+     CASE(0) ! Cartesian
       CALL ddx(fx,fA,patch_ptr%isymX)
       CALL ddy(fy,fB,patch_ptr%isymY)
       CALL ddz(fz,fC,patch_ptr%isymZ)
+#ifdef OMP_TARGET
+!$omp target 
+#endif
       df = fA + fB + fC
+#ifdef OMP_TARGET
+!$omp end target 
+#endif
      CASE(1)
       tmp = mesh_ptr%xgrid*fx             ! r*v_r
       CALL ddx(tmp,fA,patch_ptr%isymX**2)
@@ -74,6 +83,9 @@
       CALL ddz(fC,tmp)
       df = (df+tmp)/mesh_ptr%detxyz
      END SELECT
+#ifdef OMP_TARGET
+!$omp end target data 
+#endif
    END SUBROUTINE divV
  
 ! DIVERGENCE OF A TENSOR ===========================================================================
@@ -145,23 +157,47 @@
     DOUBLE PRECISION, DIMENSION(:,:,:), INTENT(IN) :: f
     DOUBLE PRECISION, DIMENSION(:,:,:), INTENT(OUT) :: dfdx,dfdy,dfdz
     DOUBLE PRECISION, DIMENSION(SIZE(f,1),SIZE(f,2),SIZE(f,3)) :: dfdA,dfdB,dfdC
+#ifdef OMP_TARGET
+!$omp target data map(f,dfdx,dfdy,dfdz)
+#endif
      CALL ddx(f,dfdx)
      CALL ddy(f,dfdy)
      CALL ddz(f,dfdz)
      SELECT CASE(patch_ptr%coordsys)
      CASE(1) ! Cylindrical
+#ifdef OMP_TARGET
+!$omp target 
+#endif
       dfdy = dfdy/mesh_ptr%xgrid
+#ifdef OMP_TARGET
+!$omp end target 
+#endif
      CASE(2) ! Spherical
+#ifdef OMP_TARGET
+!$omp target 
+#endif
       dfdy = dfdy/mesh_ptr%xgrid
       dfdz = dfdz/(mesh_ptr%xgrid*SIN(mesh_ptr%ygrid))
+#ifdef OMP_TARGET
+!$omp end target 
+#endif
      CASE(3) ! General
+#ifdef OMP_TARGET
+!$omp target 
+#endif
       dfdA = dfdx
       dfdB = dfdy
       dfdC = dfdz
       dfdx = dfdA*mesh_ptr%dAdx + dfdB*mesh_ptr%dBdx + dfdC*mesh_ptr%dCdx
       dfdy = dfdA*mesh_ptr%dAdy + dfdB*mesh_ptr%dBdy + dfdC*mesh_ptr%dCdy
       dfdz = dfdA*mesh_ptr%dAdz + dfdB*mesh_ptr%dBdz + dfdC*mesh_ptr%dCdz
+#ifdef OMP_TARGET
+!$omp end target 
+#endif
      END SELECT
+#ifdef OMP_TARGET
+!$omp end target data
+#endif
    END SUBROUTINE gradS
  
 ! GRADIENT OF A VECTOR COMPONENT =============================================================================
